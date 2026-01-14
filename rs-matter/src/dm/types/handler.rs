@@ -945,6 +945,7 @@ mod asynch {
         ChainedHandler, EmptyHandler, Handler, InvokeContext, NonBlockingHandler, ReadContext,
         WriteContext,
     };
+    use super::super::{EventCollector, PendingEvent, MAX_PENDING_EVENTS};
 
     /// A handler for processing a single IM operation:
     /// read an attribute, write an attribute, or invoke a command.
@@ -1312,10 +1313,31 @@ mod asynch {
             select(&mut handler, &mut next).coalesce().await
         }
 
-        // TODO: ChainedHandler event source support requires knowing which
-        // handler to query based on endpoint/cluster context. For now,
-        // return None and let specific handlers override.
-        // Future: Could iterate through chain to find event sources.
+        // Note: as_event_source() returns None for ChainedHandler.
+        // Use EventCollector::collect_events() to gather events from all handlers in the chain.
+    }
+
+    impl EventCollector for EmptyHandler {
+        fn collect_events(&self, _events: &mut heapless::Vec<PendingEvent, { MAX_PENDING_EVENTS }>) {
+            // Empty handler has no events
+        }
+    }
+
+    impl<M, H, T> EventCollector for ChainedHandler<M, H, T>
+    where
+        H: AsyncHandler + EventCollector,
+        T: EventCollector,
+    {
+        fn collect_events(&self, events: &mut heapless::Vec<PendingEvent, { MAX_PENDING_EVENTS }>) {
+            // Collect from the current handler's event source
+            if let Some(source) = self.handler.as_event_source() {
+                for event in source.take_pending_events() {
+                    let _ = events.push(event);
+                }
+            }
+            // Recursively collect from the next handler in the chain
+            self.next.collect_events(events);
+        }
     }
 
     /// An adaptor that adapts a `NonBlockingHandler` trait implementation to the `AsyncHandler` trait contract.

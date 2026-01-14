@@ -26,12 +26,12 @@ use embassy_time::{Instant, Timer};
 
 use crate::error::{Error, ErrorCode};
 use crate::im::{
-    IMStatusCode, InvReq, InvRespTag, OpCode, ReadReq, ReportDataReq, ReportDataRespTag,
-    StatusResp, SubscribeReq, SubscribeResp, TimedReq, WriteReq, WriteRespTag,
-    PROTO_ID_INTERACTION_MODEL,
+    EventDataIB, EventPath, EventReportIB, IMStatusCode, InvReq, InvRespTag, OpCode, ReadReq,
+    ReportDataReq, ReportDataRespTag, StatusResp, SubscribeReq, SubscribeResp, TimedReq, WriteReq,
+    WriteRespTag, PROTO_ID_INTERACTION_MODEL,
 };
 use crate::respond::ExchangeHandler;
-use crate::tlv::{get_root_node_struct, FromTLV, Nullable, TLVElement, TLVTag, TLVWrite};
+use crate::tlv::{get_root_node_struct, FromTLV, Nullable, TLVElement, TLVTag, TLVWrite, ToTLV};
 use crate::transport::exchange::{Exchange, MAX_EXCHANGE_RX_BUF_SIZE, MAX_EXCHANGE_TX_BUF_SIZE};
 use crate::utils::storage::pooled::BufferAccess;
 use crate::utils::storage::WriteBuf;
@@ -890,7 +890,8 @@ where
                             }
                         } else {
                             debug!("<<< No TX space, chunking >>>");
-                            if !self.send(true, false, wb).await? {
+                            // Pass empty events for chunked responses - events go with final response
+                            if !self.send(true, false, wb, &[]).await? {
                                 return Ok(false);
                             }
                         }
@@ -900,7 +901,10 @@ where
             }
         }
 
-        self.send(false, suppress_last_resp, wb).await
+        // Collect pending events from handlers for the final response
+        let events = self.invoker.collect_pending_events();
+
+        self.send(false, suppress_last_resp, wb, &events).await
     }
 
     /// Send the items of an array attribute one by one, until the end of the array is reached.
@@ -951,7 +955,8 @@ where
                 }
                 Err(err) if err.code() == ErrorCode::NoSpace => {
                     debug!("<<< No TX space, chunking >>>");
-                    if !self.send(true, false, wb).await? {
+                    // Pass empty events for chunked responses - events go with final response
+                    if !self.send(true, false, wb, &[]).await? {
                         return Ok(false);
                     }
                 }
@@ -975,8 +980,9 @@ where
         more_chunks: bool,
         suppress_last_resp: bool,
         wb: &mut WriteBuf<'_>,
+        events: &[PendingEvent],
     ) -> Result<bool, Error> {
-        self.end_reply(more_chunks, suppress_last_resp, wb)?;
+        self.end_reply(more_chunks, suppress_last_resp, wb, events)?;
 
         self.invoker
             .exchange()
@@ -1068,6 +1074,7 @@ where
         more_chunks: bool,
         suppress_resp: bool,
         wb: &mut WriteBuf<'_>,
+        events: &[PendingEvent],
     ) -> Result<(), Error> {
         wb.expand(Self::LONG_READS_TLV_RESERVE_SIZE)?;
 
@@ -1078,33 +1085,37 @@ where
         }
 
         // === EVENT REPORTS ===
-        // TODO: Implement event report generation here.
-        //
-        // After attribute reports are complete, check if subscription requested events:
-        //   1. Check self.req.event_requests()?.is_some()
-        //   2. Iterate through handlers via as_event_source()
-        //   3. For each EventSource with has_pending_events(), call take_pending_events()
-        //   4. Write EventReports array (tag 2) with EventReportIB structures:
-        //
-        // Example structure:
-        // ```
-        // let event_requests = self.req.event_requests()?;
-        // if event_requests.is_some() {
-        //     // Collect events from handlers
-        //     // Write EventReports array (tag 2)
-        //     // wb.start_array(&TLVTag::Context(ReportDataRespTag::EventReports as u8))?;
-        //     // for event in events {
-        //     //     EventReportIB::with_data(event_data).to_tlv(&TLVTag::Anonymous, &mut *wb)?;
-        //     // }
-        //     // wb.end_container()?;
-        // }
-        // ```
-        //
-        // Note: This requires access to handlers which is not directly available here.
-        // Consider either:
-        //   a) Pass event sources to end_reply
-        //   b) Collect events in respond() before calling send()
-        //   c) Add event collection to HandlerInvoker
+        // Write collected events to the EventReports array (tag 2)
+        if !events.is_empty() {
+            wb.start_array(&TLVTag::Context(ReportDataRespTag::EventReports as u8))?;
+
+            for event in events {
+                let event_data = EventDataIB {
+                    path: EventPath {
+                        node: None,
+                        endpoint: Some(event.endpoint_id),
+                        cluster: Some(event.cluster_id),
+                        event: Some(event.event_id),
+                        is_urgent: None, // TODO: Support urgent events
+                    },
+                    event_number: event.event_number,
+                    priority: event.priority,
+                    epoch_timestamp: None, // TODO: Add epoch timestamp support
+                    system_timestamp: Some(event.system_timestamp_ms),
+                    delta_epoch_timestamp: None,
+                    delta_system_timestamp: None,
+                    data: if event.payload.is_empty() {
+                        None
+                    } else {
+                        Some(&event.payload)
+                    },
+                };
+
+                EventReportIB::with_data(event_data).to_tlv(&TLVTag::Anonymous, &mut *wb)?;
+            }
+
+            wb.end_container()?;
+        }
 
         if more_chunks {
             wb.bool(

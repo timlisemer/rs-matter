@@ -4,13 +4,16 @@ This document describes the implementation of Matter event reporting in rs-matte
 
 ## Status
 
-**Infrastructure Complete** - Event support infrastructure implemented per [Issue #36](https://github.com/project-chip/rs-matter/issues/36).
+**Fully Implemented** - Event support fully implemented per [Issue #36](https://github.com/project-chip/rs-matter/issues/36).
 
-The core rs-matter event support is in place. To use events in a cluster handler:
+The rs-matter event support is complete including ReportDataResponder integration. Events are now automatically included in subscription reports when handlers implement `EventSource`.
+
+To use events in a cluster handler:
 1. Implement `EventSource` trait on your handler
 2. Override `as_event_source()` in your `AsyncHandler` impl to return `Some(self)`
 3. Queue events using `PendingEvent` and the encoding helpers in `generic_switch.rs`
 4. Call `subscriptions.notify_event()` when events are queued
+5. Events will be automatically collected and sent in ReportData responses
 
 ### Implementation Progress
 
@@ -25,6 +28,16 @@ The core rs-matter event support is in place. To use events in a cluster handler
 - [x] `rs-matter/src/dm.rs` - ReportDataResponder events (TODO scaffolding)
 - [x] `rs-matter/src/dm/clusters/generic_switch.rs` - Event constants
 - [x] Build and test (2026-01-14: cargo build + cargo test passed, 39 tests passed)
+
+### ReportDataResponder Integration (Phase 2)
+
+- [x] `rs-matter/src/im/attr.rs` - Add event_requests() to ReportDataReq
+- [x] `rs-matter/src/dm/types/reply.rs` - Add collect_pending_events() to HandlerInvoker
+- [x] `rs-matter/src/dm/types/handler.rs` - Add EventCollector trait
+- [x] `rs-matter/src/dm.rs` - Modify respond() to collect events
+- [x] `rs-matter/src/dm.rs` - Modify send() signature
+- [x] `rs-matter/src/dm.rs` - Write EventReports in end_reply()
+- [x] Build and test (2026-01-14: cargo build + cargo test -p rs-matter passed, 39 tests passed)
 
 ## Background
 

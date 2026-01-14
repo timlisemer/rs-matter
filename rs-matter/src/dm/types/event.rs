@@ -192,6 +192,24 @@ pub trait EventSource: Send + Sync {
     }
 }
 
+/// Trait for collecting events from handler chains.
+///
+/// This trait enables recursive event collection from chained handlers.
+/// Implement this on handler wrapper types (like `ChainedHandler`) to
+/// collect events from all handlers in the chain.
+///
+/// # Usage
+///
+/// The data model calls `collect_events()` during subscription report
+/// generation to gather all pending events from the handler hierarchy.
+pub trait EventCollector {
+    /// Collect pending events from this handler and any nested handlers.
+    ///
+    /// Events are appended to the provided vector. Implementations should
+    /// call `collect_events` recursively on nested handlers.
+    fn collect_events(&self, events: &mut heapless::Vec<PendingEvent, { MAX_PENDING_EVENTS }>);
+}
+
 /// Global event number generator.
 ///
 /// Provides monotonically increasing event numbers across all clusters.

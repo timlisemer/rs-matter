@@ -311,6 +311,18 @@ where
             InvokeReplyInstance::new(cmd, tw),
         )
     }
+
+    /// Collect pending events from the handler's event source.
+    ///
+    /// Returns events from handlers that implement the `EventSource` trait.
+    /// For handlers without event support, returns an empty vector.
+    pub fn collect_pending_events(&self) -> heapless::Vec<super::PendingEvent, { super::MAX_PENDING_EVENTS }> {
+        if let Some(event_source) = self.handler.as_event_source() {
+            event_source.take_pending_events()
+        } else {
+            heapless::Vec::new()
+        }
+    }
 }
 
 /// A concrete implementation of the `ReadReply` trait for encoding attribute data.
