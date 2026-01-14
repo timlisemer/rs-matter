@@ -277,6 +277,14 @@ impl<'a> ReportDataReq<'a> {
             Self::Subscribe(req) | Self::SubscribeReport(req) => req.event_requests(),
         }
     }
+
+    pub fn event_filters(&self) -> Result<Option<TLVArray<'a, EventFilter>>, Error> {
+        match self {
+            Self::Read(req) => req.event_filters(),
+            Self::Subscribe(req) => req.event_filters(),
+            Self::SubscribeReport(_) => Ok(None),
+        }
+    }
 }
 
 /// Report Data Message

@@ -901,8 +901,46 @@ where
             }
         }
 
+        // Extract event_min from request's event filters (if any)
+        let event_min = self
+            .req
+            .event_filters()
+            .ok()
+            .flatten()
+            .and_then(|filters| {
+                // Use the first filter's event_min (per Matter spec, typically only one filter)
+                filters
+                    .iter()
+                    .next()
+                    .and_then(|result| result.ok())
+                    .and_then(|f| f.event_min)
+            });
+
         // Collect pending events from handlers for the final response
-        let events = self.invoker.collect_pending_events();
+        let mut events = self.invoker.collect_pending_events(event_min);
+
+        // Filter events against requested event paths (wildcard support)
+        // Per Matter spec, None in any path component acts as a wildcard
+        if let Ok(Some(event_requests)) = self.req.event_requests() {
+            // Collect valid paths into a temporary vector to avoid borrowing issues
+            let mut paths: heapless::Vec<_, 8> = heapless::Vec::new();
+            for path in event_requests.into_iter().flatten() {
+                paths.push((path.endpoint, path.cluster, path.event)).ok();
+            }
+
+            // Filter events to only include those matching at least one requested path
+            if !paths.is_empty() {
+                events.retain(|event| {
+                    paths.iter().any(|(endpoint, cluster, event_id)| {
+                        event_matches_path(event, *endpoint, *cluster, *event_id)
+                    })
+                });
+            }
+        }
+
+        // Sort events by priority: Critical first, then Info, then Debug
+        // This ensures important events are sent first when chunking
+        sort_events_by_priority(&mut events);
 
         self.send(false, suppress_last_resp, wb, &events).await
     }
@@ -1086,10 +1124,40 @@ where
 
         // === EVENT REPORTS ===
         // Write collected events to the EventReports array (tag 2)
+        // Per Matter spec: first event uses absolute timestamp, subsequent events use delta
         if !events.is_empty() {
             wb.start_array(&TLVTag::Context(ReportDataRespTag::EventReports as u8))?;
 
+            // Track previous event's timestamp for delta calculation
+            let mut prev_timestamp: Option<EventTimestamp> = None;
+
             for event in events {
+                let current_timestamp = EventTimestamp::from_event(event);
+
+                // Calculate delta or use absolute timestamp
+                let (epoch_timestamp, system_timestamp, delta_epoch_timestamp, delta_system_timestamp) =
+                    if let Some(ref prev) = prev_timestamp {
+                        // Try to calculate delta from previous event
+                        if let Some((delta_epoch, delta_system)) = prev.delta_to(&current_timestamp) {
+                            // Delta calculation successful - use delta timestamps
+                            (None, None, delta_epoch, delta_system)
+                        } else {
+                            // Mixed timestamp types - fall back to absolute
+                            if let Some(epoch_us) = event.epoch_timestamp_us {
+                                (Some(epoch_us), None, None, None)
+                            } else {
+                                (None, Some(event.system_timestamp_ms), None, None)
+                            }
+                        }
+                    } else {
+                        // First event - use absolute timestamp
+                        if let Some(epoch_us) = event.epoch_timestamp_us {
+                            (Some(epoch_us), None, None, None)
+                        } else {
+                            (None, Some(event.system_timestamp_ms), None, None)
+                        }
+                    };
+
                 let event_data = EventDataIB {
                     path: EventPath {
                         node: None,
@@ -1104,10 +1172,10 @@ where
                     },
                     event_number: event.event_number,
                     priority: event.priority,
-                    epoch_timestamp: None, // TODO: Add epoch timestamp support
-                    system_timestamp: Some(event.system_timestamp_ms),
-                    delta_epoch_timestamp: None,
-                    delta_system_timestamp: None,
+                    epoch_timestamp,
+                    system_timestamp,
+                    delta_epoch_timestamp,
+                    delta_system_timestamp,
                     data: if event.payload.is_empty() {
                         None
                     } else {
@@ -1116,6 +1184,9 @@ where
                 };
 
                 EventReportIB::with_data(event_data).to_tlv(&TLVTag::Anonymous, &mut *wb)?;
+
+                // Update previous timestamp for next iteration
+                prev_timestamp = Some(current_timestamp);
             }
 
             wb.end_container()?;

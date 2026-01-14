@@ -316,9 +316,20 @@ where
     ///
     /// Returns events from handlers that implement the `EventSource` trait.
     /// For handlers without event support, returns an empty vector.
-    pub fn collect_pending_events(&self) -> heapless::Vec<super::PendingEvent, { super::MAX_PENDING_EVENTS }> {
+    ///
+    /// # Arguments
+    /// - `min_event_number`: If `Some`, only return events with `event_number >= min`.
+    ///   This implements EventFilter support per Matter spec.
+    pub fn collect_pending_events(
+        &self,
+        min_event_number: Option<u64>,
+    ) -> heapless::Vec<super::PendingEvent, { super::MAX_PENDING_EVENTS }> {
         if let Some(event_source) = self.handler.as_event_source() {
-            event_source.take_pending_events()
+            if let Some(min) = min_event_number {
+                event_source.take_events_since(min)
+            } else {
+                event_source.take_pending_events()
+            }
         } else {
             heapless::Vec::new()
         }

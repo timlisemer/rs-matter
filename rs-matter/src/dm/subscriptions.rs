@@ -48,10 +48,17 @@ struct Subscription {
     // TODO: Change to `Option<Instant>` to avoid using `Instant::MAX` as a sentinel value
     reported_at: Instant,
     changed: bool,
+    /// Whether there are urgent (Critical priority) events pending.
+    /// Urgent events bypass min_interval per Matter spec.
+    has_urgent_events: bool,
 }
 
 impl Subscription {
     pub fn report_due(&self, now: Instant) -> bool {
+        // Urgent events (Critical priority) bypass min_interval per Matter spec
+        if self.has_urgent_events {
+            return true;
+        }
         // Either the data for the subscription had changed and therefore we need to report,
         // or the data for the subscription had not changed yet, however the report interval is due
         self.changed && self.expired(self.min_int_secs, now)
@@ -169,17 +176,45 @@ where
     ///
     /// Currently, this reuses the same mechanism as attribute changes.
     /// TODO: Track events separately for proper event filtering support.
-    /// TODO: Support urgent events that bypass min_interval.
     pub fn notify_event(&self, _endpoint_id: EndptId, _cluster_id: ClusterId, _event_id: u32) {
         // TODO: Make use of the endpoint_id, cluster_id, and event_id parameters
         // to implement more intelligent event filtering per subscription
-        // TODO: Support urgent/critical events that bypass min_interval
 
         // For now, reuse the same "changed" mechanism as attributes
         self.state.lock(|internal| {
             let subscriptions = &mut internal.borrow_mut().subscriptions;
             for sub in subscriptions.iter_mut() {
                 sub.changed = true;
+            }
+        });
+
+        self.notification.notify();
+    }
+
+    /// Notify the instance that an urgent (Critical priority) event has occurred.
+    ///
+    /// Urgent events bypass min_interval per Matter specification, triggering
+    /// an immediate report. This should be called for Critical priority events
+    /// that require immediate delivery (e.g., safety alerts, alarms).
+    ///
+    /// # Arguments
+    /// - `endpoint_id`: The endpoint ID where the event occurred.
+    /// - `cluster_id`: The cluster ID that generated the event.
+    /// - `event_id`: The event ID within the cluster.
+    pub fn notify_urgent_event(
+        &self,
+        _endpoint_id: EndptId,
+        _cluster_id: ClusterId,
+        _event_id: u32,
+    ) {
+        // TODO: Make use of the endpoint_id, cluster_id, and event_id parameters
+        // to implement more intelligent event filtering per subscription
+
+        self.state.lock(|internal| {
+            let subscriptions = &mut internal.borrow_mut().subscriptions;
+            for sub in subscriptions.iter_mut() {
+                sub.changed = true;
+                sub.has_urgent_events = true;
             }
         });
 
@@ -210,6 +245,7 @@ where
                     max_int_secs,
                     reported_at: Instant::MAX,
                     changed: false,
+                    has_urgent_events: false,
                 })
                 .map(|_| id)
                 .ok()
@@ -227,6 +263,7 @@ where
             if let Some(sub) = subscriptions.iter_mut().find(|sub| sub.id == id) {
                 sub.reported_at = Instant::now();
                 sub.changed = false;
+                sub.has_urgent_events = false;
 
                 true
             } else {

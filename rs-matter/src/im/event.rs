@@ -292,8 +292,54 @@ impl<'a> ToTLV for EventDataIB<'a> {
     }
 }
 
-// TODO: Implement FromTLV for EventDataIB to parse events from other Matter nodes
-// impl<'a> FromTLV<'a> for EventDataIB<'a> { ... }
+impl<'a> FromTLV<'a> for EventDataIB<'a> {
+    fn from_tlv(element: &TLVElement<'a>) -> Result<Self, Error> {
+        let seq = element.r#struct()?;
+
+        // Required fields
+        let path = EventPath::from_tlv(&seq.find_ctx(EventDataTag::Path as u8)?)?;
+        let event_number = u64::from_tlv(&seq.find_ctx(EventDataTag::EventNumber as u8)?)?;
+        let priority = EventPriority::from_tlv(&seq.find_ctx(EventDataTag::Priority as u8)?)?;
+
+        // Timestamps - exactly one should be present (optional fields)
+        let epoch_elem = seq.find_ctx(EventDataTag::EpochTimestamp as u8)?;
+        let system_elem = seq.find_ctx(EventDataTag::SystemTimestamp as u8)?;
+        let delta_epoch_elem = seq.find_ctx(EventDataTag::DeltaEpochTimestamp as u8)?;
+        let delta_system_elem = seq.find_ctx(EventDataTag::DeltaSystemTimestamp as u8)?;
+
+        let epoch_timestamp = epoch_elem
+            .non_empty()
+            .map(u64::from_tlv)
+            .transpose()?;
+        let system_timestamp = system_elem
+            .non_empty()
+            .map(u64::from_tlv)
+            .transpose()?;
+        let delta_epoch_timestamp = delta_epoch_elem
+            .non_empty()
+            .map(u64::from_tlv)
+            .transpose()?;
+        let delta_system_timestamp = delta_system_elem
+            .non_empty()
+            .map(u64::from_tlv)
+            .transpose()?;
+
+        // Data payload - optional, store raw bytes
+        let data_elem = seq.find_ctx(EventDataTag::Data as u8)?;
+        let data = data_elem.non_empty().map(|e| e.raw_data());
+
+        Ok(Self {
+            path,
+            event_number,
+            priority,
+            epoch_timestamp,
+            system_timestamp,
+            delta_epoch_timestamp,
+            delta_system_timestamp,
+            data,
+        })
+    }
+}
 
 /// Event report containing either event data or error status.
 ///
@@ -361,8 +407,29 @@ impl<'a> ToTLV for EventReportIB<'a> {
     }
 }
 
-// TODO: Implement FromTLV for EventReportIB to parse event reports from other nodes
-// impl<'a> FromTLV<'a> for EventReportIB<'a> { ... }
+impl<'a> FromTLV<'a> for EventReportIB<'a> {
+    fn from_tlv(element: &TLVElement<'a>) -> Result<Self, Error> {
+        let seq = element.r#struct()?;
+
+        // Both fields are optional, but exactly one should be present
+        let status_elem = seq.find_ctx(EventReportTag::EventStatus as u8)?;
+        let data_elem = seq.find_ctx(EventReportTag::EventData as u8)?;
+
+        let event_status = status_elem
+            .non_empty()
+            .map(EventStatusIB::from_tlv)
+            .transpose()?;
+        let event_data = data_elem
+            .non_empty()
+            .map(EventDataIB::from_tlv)
+            .transpose()?;
+
+        Ok(Self {
+            event_status,
+            event_data,
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -404,5 +471,160 @@ mod tests {
         let report = EventReportIB::with_status(status);
         assert!(report.event_status.is_some());
         assert!(report.event_data.is_none());
+    }
+
+    #[test]
+    fn test_event_data_ib_round_trip() {
+        use crate::tlv::TLVWrite;
+        use crate::utils::storage::WriteBuf;
+
+        let original = EventDataIB {
+            path: EventPath {
+                node: None,
+                endpoint: Some(1),
+                cluster: Some(0x003B),
+                event: Some(0x01),
+                is_urgent: None,
+            },
+            event_number: 42,
+            priority: EventPriority::Info,
+            epoch_timestamp: None,
+            system_timestamp: Some(123456),
+            delta_epoch_timestamp: None,
+            delta_system_timestamp: None,
+            data: None,
+        };
+
+        // Serialize to TLV
+        let mut buf = [0u8; 128];
+        let mut wb = WriteBuf::new(&mut buf);
+        original.to_tlv(&TLVTag::Anonymous, &mut wb).unwrap();
+        let len = wb.get_tail();
+
+        // Parse back
+        let elem = TLVElement::new(&buf[..len]);
+        let parsed = EventDataIB::from_tlv(&elem).unwrap();
+
+        // Verify fields match
+        assert_eq!(parsed.path.endpoint, original.path.endpoint);
+        assert_eq!(parsed.path.cluster, original.path.cluster);
+        assert_eq!(parsed.path.event, original.path.event);
+        assert_eq!(parsed.event_number, original.event_number);
+        assert_eq!(parsed.priority, original.priority);
+        assert_eq!(parsed.system_timestamp, original.system_timestamp);
+        assert_eq!(parsed.epoch_timestamp, original.epoch_timestamp);
+    }
+
+    #[test]
+    fn test_event_data_ib_round_trip_with_epoch() {
+        use crate::tlv::TLVWrite;
+        use crate::utils::storage::WriteBuf;
+
+        let original = EventDataIB {
+            path: EventPath {
+                node: None,
+                endpoint: Some(2),
+                cluster: Some(0x003B),
+                event: Some(0x03),
+                is_urgent: Some(true),
+            },
+            event_number: 100,
+            priority: EventPriority::Critical,
+            epoch_timestamp: Some(1700000000000000),
+            system_timestamp: None,
+            delta_epoch_timestamp: None,
+            delta_system_timestamp: None,
+            data: None,
+        };
+
+        // Serialize to TLV
+        let mut buf = [0u8; 128];
+        let mut wb = WriteBuf::new(&mut buf);
+        original.to_tlv(&TLVTag::Anonymous, &mut wb).unwrap();
+        let len = wb.get_tail();
+
+        // Parse back
+        let elem = TLVElement::new(&buf[..len]);
+        let parsed = EventDataIB::from_tlv(&elem).unwrap();
+
+        // Verify fields match
+        assert_eq!(parsed.event_number, original.event_number);
+        assert_eq!(parsed.priority, EventPriority::Critical);
+        assert_eq!(parsed.epoch_timestamp, original.epoch_timestamp);
+        assert!(parsed.system_timestamp.is_none());
+    }
+
+    #[test]
+    fn test_event_report_ib_round_trip_with_data() {
+        use crate::tlv::TLVWrite;
+        use crate::utils::storage::WriteBuf;
+
+        let event_data = EventDataIB {
+            path: EventPath {
+                node: None,
+                endpoint: Some(1),
+                cluster: Some(0x003B),
+                event: Some(0x01),
+                is_urgent: None,
+            },
+            event_number: 1,
+            priority: EventPriority::Info,
+            epoch_timestamp: None,
+            system_timestamp: Some(5000),
+            delta_epoch_timestamp: None,
+            delta_system_timestamp: None,
+            data: None,
+        };
+        let original = EventReportIB::with_data(event_data);
+
+        // Serialize to TLV
+        let mut buf = [0u8; 128];
+        let mut wb = WriteBuf::new(&mut buf);
+        original.to_tlv(&TLVTag::Anonymous, &mut wb).unwrap();
+        let len = wb.get_tail();
+
+        // Parse back
+        let elem = TLVElement::new(&buf[..len]);
+        let parsed = EventReportIB::from_tlv(&elem).unwrap();
+
+        // Verify structure
+        assert!(parsed.event_data.is_some());
+        assert!(parsed.event_status.is_none());
+
+        let parsed_data = parsed.event_data.unwrap();
+        assert_eq!(parsed_data.event_number, 1);
+        assert_eq!(parsed_data.priority, EventPriority::Info);
+    }
+
+    #[test]
+    fn test_event_report_ib_round_trip_with_status() {
+        use crate::tlv::TLVWrite;
+        use crate::utils::storage::WriteBuf;
+
+        let status = EventStatusIB {
+            path: EventPath {
+                node: None,
+                endpoint: Some(1),
+                cluster: Some(0x003B),
+                event: Some(0x01),
+                is_urgent: None,
+            },
+            status: Status::new(super::super::IMStatusCode::UnsupportedEvent, None),
+        };
+        let original = EventReportIB::with_status(status);
+
+        // Serialize to TLV
+        let mut buf = [0u8; 128];
+        let mut wb = WriteBuf::new(&mut buf);
+        original.to_tlv(&TLVTag::Anonymous, &mut wb).unwrap();
+        let len = wb.get_tail();
+
+        // Parse back
+        let elem = TLVElement::new(&buf[..len]);
+        let parsed = EventReportIB::from_tlv(&elem).unwrap();
+
+        // Verify structure
+        assert!(parsed.event_status.is_some());
+        assert!(parsed.event_data.is_none());
     }
 }
