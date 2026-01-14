@@ -34,7 +34,7 @@
 //! - [`EventStatusIB`] - Error status for failed event reads
 
 use crate::error::Error;
-use crate::tlv::{FromTLV, TLVElement, TLVTag, TLVWrite, ToTLV};
+use crate::tlv::{FromTLV, TLVControl, TLVElement, TLVTag, TLVWrite, ToTLV};
 
 use super::{EventPath, Status};
 
@@ -262,15 +262,23 @@ impl<'a> ToTLV for EventDataIB<'a> {
         // Note: If no timestamp is set, this is technically invalid per spec
         // but we allow it for flexibility during development
 
-        // Data payload (tag 7) - optional, pre-encoded TLV
-        // TODO: Implement proper raw TLV data writing
-        // The TLVWrite trait doesn't support writing pre-encoded TLV data directly.
-        // For now, we skip the data payload. To properly implement this, either:
-        // 1. Add a raw() method to TLVWrite trait
-        // 2. Use WriteBuf directly which has raw_value()
-        // 3. Re-encode the payload from structured data instead of pre-encoded bytes
-        if let Some(_data) = self.data {
-            // tw.raw(&TLVTag::Context(EventDataTag::Data as u8), data)?;
+        // Data payload (tag 7) - pre-encoded TLV with re-tagging
+        if let Some(data) = self.data {
+            if !data.is_empty() {
+                // The payload is a pre-encoded TLV element with anonymous tag.
+                // Parse the control byte to extract the value type.
+                let control = TLVControl::parse(data[0])?;
+
+                // Write context tag 7 with the parsed value type
+                tw.raw_value(
+                    &TLVTag::Context(EventDataTag::Data as u8),
+                    control.value_type,
+                    &[],
+                )?;
+
+                // Write the rest of the payload (skip the anonymous control byte)
+                tw.write_raw_data(data[1..].iter().copied())?;
+            }
         }
 
         tw.end_container()

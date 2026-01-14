@@ -1096,7 +1096,11 @@ where
                         endpoint: Some(event.endpoint_id),
                         cluster: Some(event.cluster_id),
                         event: Some(event.event_id),
-                        is_urgent: None, // TODO: Support urgent events
+                        is_urgent: if matches!(event.priority, crate::im::EventPriority::Critical) {
+                            Some(true)
+                        } else {
+                            None
+                        },
                     },
                     event_number: event.event_number,
                     priority: event.priority,
