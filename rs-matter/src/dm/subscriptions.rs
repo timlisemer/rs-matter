@@ -155,6 +155,37 @@ where
         self.notification.notify();
     }
 
+    /// Notify the instance that an event has occurred on a specific cluster.
+    ///
+    /// This marks relevant subscriptions as changed, triggering a report on the next interval.
+    /// Events are collected from handlers during report generation via `AsyncHandler::as_event_source()`.
+    ///
+    /// # Arguments
+    /// - `endpoint_id`: The endpoint ID where the event occurred.
+    /// - `cluster_id`: The cluster ID that generated the event.
+    /// - `event_id`: The event ID within the cluster.
+    ///
+    /// # Note
+    ///
+    /// Currently, this reuses the same mechanism as attribute changes.
+    /// TODO: Track events separately for proper event filtering support.
+    /// TODO: Support urgent events that bypass min_interval.
+    pub fn notify_event(&self, _endpoint_id: EndptId, _cluster_id: ClusterId, _event_id: u32) {
+        // TODO: Make use of the endpoint_id, cluster_id, and event_id parameters
+        // to implement more intelligent event filtering per subscription
+        // TODO: Support urgent/critical events that bypass min_interval
+
+        // For now, reuse the same "changed" mechanism as attributes
+        self.state.lock(|internal| {
+            let subscriptions = &mut internal.borrow_mut().subscriptions;
+            for sub in subscriptions.iter_mut() {
+                sub.changed = true;
+            }
+        });
+
+        self.notification.notify();
+    }
+
     pub(crate) fn add(
         &self,
         fabric_idx: NonZeroU8,

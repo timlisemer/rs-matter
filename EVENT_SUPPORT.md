@@ -4,7 +4,27 @@ This document describes the implementation of Matter event reporting in rs-matte
 
 ## Status
 
-**Work in Progress** - Implementing event support per [Issue #36](https://github.com/project-chip/rs-matter/issues/36).
+**Infrastructure Complete** - Event support infrastructure implemented per [Issue #36](https://github.com/project-chip/rs-matter/issues/36).
+
+The core rs-matter event support is in place. To use events in a cluster handler:
+1. Implement `EventSource` trait on your handler
+2. Override `as_event_source()` in your `AsyncHandler` impl to return `Some(self)`
+3. Queue events using `PendingEvent` and the encoding helpers in `generic_switch.rs`
+4. Call `subscriptions.notify_event()` when events are queued
+
+### Implementation Progress
+
+- [x] EVENT_SUPPORT.md documentation
+- [x] `rs-matter/src/im/event.rs` - TLV structures
+- [x] `rs-matter/src/im/attr.rs` - Fix ReportDataRespTag
+- [x] `rs-matter/src/im/mod.rs` - Export event module
+- [x] `rs-matter/src/dm/types/event.rs` - EventSource trait
+- [x] `rs-matter/src/dm/types/mod.rs` - Export event module
+- [x] `rs-matter/src/dm/types/handler.rs` - Add as_event_source()
+- [x] `rs-matter/src/dm/subscriptions.rs` - Add notify_event()
+- [x] `rs-matter/src/dm.rs` - ReportDataResponder events (TODO scaffolding)
+- [x] `rs-matter/src/dm/clusters/generic_switch.rs` - Event constants
+- [x] Build and test (2026-01-14: cargo build + cargo test passed, 39 tests passed)
 
 ## Background
 

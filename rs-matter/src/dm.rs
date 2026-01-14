@@ -1077,6 +1077,35 @@ where
             wb.end_container()?;
         }
 
+        // === EVENT REPORTS ===
+        // TODO: Implement event report generation here.
+        //
+        // After attribute reports are complete, check if subscription requested events:
+        //   1. Check self.req.event_requests()?.is_some()
+        //   2. Iterate through handlers via as_event_source()
+        //   3. For each EventSource with has_pending_events(), call take_pending_events()
+        //   4. Write EventReports array (tag 2) with EventReportIB structures:
+        //
+        // Example structure:
+        // ```
+        // let event_requests = self.req.event_requests()?;
+        // if event_requests.is_some() {
+        //     // Collect events from handlers
+        //     // Write EventReports array (tag 2)
+        //     // wb.start_array(&TLVTag::Context(ReportDataRespTag::EventReports as u8))?;
+        //     // for event in events {
+        //     //     EventReportIB::with_data(event_data).to_tlv(&TLVTag::Anonymous, &mut *wb)?;
+        //     // }
+        //     // wb.end_container()?;
+        // }
+        // ```
+        //
+        // Note: This requires access to handlers which is not directly available here.
+        // Consider either:
+        //   a) Pass event sources to end_reply
+        //   b) Collect events in respond() before calling send()
+        //   c) Add event collection to HandlerInvoker
+
         if more_chunks {
             wb.bool(
                 &TLVTag::Context(ReportDataRespTag::MoreChunkedMsgs as u8),

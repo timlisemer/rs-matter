@@ -937,7 +937,7 @@ mod asynch {
     use either::Either;
     use embassy_futures::select::select;
 
-    use crate::dm::{HandlerContext, InvokeReply, Matcher, ReadReply};
+    use crate::dm::{EventSource, HandlerContext, InvokeReply, Matcher, ReadReply};
     use crate::error::{Error, ErrorCode};
     use crate::utils::select::Coalesce;
 
@@ -1023,6 +1023,35 @@ mod asynch {
             // This is useful for handlers that do not need to run any async operations in the background.
             core::future::pending::<Result<(), Error>>()
         }
+
+        /// Returns this handler as an EventSource if it supports events.
+        ///
+        /// Override this method in handlers that implement [`EventSource`] to enable
+        /// event reporting for their cluster. The data model will call this during
+        /// subscription report generation to collect pending events.
+        ///
+        /// # Default Implementation
+        ///
+        /// Returns `None`, indicating the handler does not produce events.
+        ///
+        /// # Example
+        ///
+        /// ```ignore
+        /// impl AsyncHandler for GenericSwitchHandler {
+        ///     // ... other methods ...
+        ///
+        ///     fn as_event_source(&self) -> Option<&dyn EventSource> {
+        ///         Some(self)
+        ///     }
+        /// }
+        /// ```
+        ///
+        /// TODO: Once event support is fully implemented in the data model,
+        /// this method will be called during subscription reports to collect
+        /// pending events from handlers.
+        fn as_event_source(&self) -> Option<&dyn EventSource> {
+            None
+        }
     }
 
     impl<T> AsyncHandler for &mut T
@@ -1063,6 +1092,10 @@ mod asynch {
 
         fn run(&self, ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>> {
             (**self).run(ctx)
+        }
+
+        fn as_event_source(&self) -> Option<&dyn EventSource> {
+            (**self).as_event_source()
         }
     }
 
@@ -1105,6 +1138,10 @@ mod asynch {
         fn run(&self, ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>> {
             (**self).run(ctx)
         }
+
+        fn as_event_source(&self) -> Option<&dyn EventSource> {
+            (**self).as_event_source()
+        }
     }
 
     impl<M, H> AsyncHandler for (M, H)
@@ -1146,6 +1183,10 @@ mod asynch {
         fn run(&self, ctx: impl HandlerContext) -> impl Future<Output = Result<(), Error>> {
             self.1.run(ctx)
         }
+
+        fn as_event_source(&self) -> Option<&dyn EventSource> {
+            self.1.as_event_source()
+        }
     }
 
     impl<T> AsyncHandler for Async<T>
@@ -1179,6 +1220,9 @@ mod asynch {
         ) -> Result<(), Error> {
             Handler::invoke(&self.0, ctx, reply)
         }
+
+        // Async<T> wraps NonBlockingHandler which doesn't support events by default
+        // Override in specific implementations if needed
     }
 
     impl AsyncHandler for EmptyHandler {
@@ -1267,6 +1311,11 @@ mod asynch {
 
             select(&mut handler, &mut next).coalesce().await
         }
+
+        // TODO: ChainedHandler event source support requires knowing which
+        // handler to query based on endpoint/cluster context. For now,
+        // return None and let specific handlers override.
+        // Future: Could iterate through chain to find event sources.
     }
 
     /// An adaptor that adapts a `NonBlockingHandler` trait implementation to the `AsyncHandler` trait contract.
