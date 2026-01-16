@@ -325,11 +325,14 @@ where
         min_event_number: Option<u64>,
     ) -> heapless::Vec<super::PendingEvent, { super::MAX_PENDING_EVENTS }> {
         if let Some(event_source) = self.handler.as_event_source() {
-            if let Some(min) = min_event_number {
+            info!("[EVENTS] as_event_source returned Some, collecting...");
+            let events = if let Some(min) = min_event_number {
                 event_source.take_events_since(min)
             } else {
                 event_source.take_pending_events()
-            }
+            };
+            info!("[EVENTS] collected {} events from source", events.len());
+            events
         } else {
             heapless::Vec::new()
         }

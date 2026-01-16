@@ -1313,8 +1313,14 @@ mod asynch {
             select(&mut handler, &mut next).coalesce().await
         }
 
-        // Note: as_event_source() returns None for ChainedHandler.
-        // Use EventCollector::collect_events() to gather events from all handlers in the chain.
+        fn as_event_source(&self) -> Option<&dyn EventSource> {
+            // Try current handler first
+            if let Some(source) = self.handler.as_event_source() {
+                return Some(source);
+            }
+            // Otherwise delegate to next in chain
+            self.next.as_event_source()
+        }
     }
 
     impl EventCollector for EmptyHandler {

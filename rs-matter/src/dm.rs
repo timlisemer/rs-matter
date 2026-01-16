@@ -918,6 +918,9 @@ where
 
         // Collect pending events from handlers for the final response
         let mut events = self.invoker.collect_pending_events(event_min);
+        if !events.is_empty() {
+            info!("[EVENTS] collect_pending_events returned {} events", events.len());
+        }
 
         // Filter events against requested event paths (wildcard support)
         // Per Matter spec, None in any path component acts as a wildcard
@@ -925,16 +928,27 @@ where
             // Collect valid paths into a temporary vector to avoid borrowing issues
             let mut paths: heapless::Vec<_, 8> = heapless::Vec::new();
             for path in event_requests.into_iter().flatten() {
+                info!("[EVENTS] Subscription has event request: endpoint={:?}, cluster={:?}, event={:?}",
+                    path.endpoint, path.cluster, path.event);
                 paths.push((path.endpoint, path.cluster, path.event)).ok();
             }
 
             // Filter events to only include those matching at least one requested path
             if !paths.is_empty() {
+                let before_count = events.len();
                 events.retain(|event| {
                     paths.iter().any(|(endpoint, cluster, event_id)| {
                         event_matches_path(event, *endpoint, *cluster, *event_id)
                     })
                 });
+                if before_count > 0 && events.len() != before_count {
+                    info!("[EVENTS] Filtered events: {} -> {} (path matching)", before_count, events.len());
+                }
+            }
+        } else {
+            // Log once when events are pending but subscription has no event requests
+            if !events.is_empty() {
+                warn!("[EVENTS] Subscription has NO event requests - {} events will not be reported!", events.len());
             }
         }
 
@@ -1126,12 +1140,21 @@ where
         // Write collected events to the EventReports array (tag 2)
         // Per Matter spec: first event uses absolute timestamp, subsequent events use delta
         if !events.is_empty() {
+            info!("[EVENTS] end_reply encoding {} events", events.len());
+            let event_start_pos = wb.get_tail();
             wb.start_array(&TLVTag::Context(ReportDataRespTag::EventReports as u8))?;
 
             // Track previous event's timestamp for delta calculation
             let mut prev_timestamp: Option<EventTimestamp> = None;
 
             for event in events {
+                // Log event details before encoding
+                info!("[EVENTS] Encoding event #{}: endpoint={}, cluster=0x{:04X}, event_id=0x{:02X}",
+                    event.event_number, event.endpoint_id, event.cluster_id, event.event_id);
+                if !event.payload.is_empty() {
+                    info!("[EVENTS]   payload ({} bytes): {:02X?}", event.payload.len(), event.payload.as_slice());
+                }
+
                 let current_timestamp = EventTimestamp::from_event(event);
 
                 // Calculate delta or use absolute timestamp
@@ -1190,6 +1213,11 @@ where
             }
 
             wb.end_container()?;
+
+            // Log hex dump of encoded EventReports array
+            let event_end_pos = wb.get_tail();
+            let event_bytes = &wb.as_slice()[event_start_pos..event_end_pos];
+            info!("[EVENTS] EventReports TLV ({} bytes): {:02X?}", event_bytes.len(), event_bytes);
         }
 
         if more_chunks {
